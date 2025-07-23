@@ -1,16 +1,26 @@
 import re
 import time
+import json
+from textwrap import dedent
 
-
-
-TASK_MODEL_NAME = "adesso-smart"
+TASK_MODEL_NAME = "mistral-dings"
 MAX_RETRIES = 3  # Number of retries for LLM calls
 
 def evaluate_single_example(example, individual_scores, prompt, test_model, total_score):
     input_text = example["text"]
     expected_score = example["label"]
     # Prepare the message for the LLM
+
+    formatpromt = dedent("""
+    Make sure your respone is a valid JSON object.
+    Return your evaluation as a JSON object with the following format:
+{{
+    "sentiment_score": [score],
+    "reasoning": "[brief explanation of scores]"
+}}
+    """)
     messages = [
+        {"role": "system", "content": formatpromt},
         {"role": "user", "content": prompt.format(input_text=input_text)}
     ]
     # Call the LLM with retry logic
@@ -28,17 +38,23 @@ def evaluate_single_example(example, individual_scores, prompt, test_model, tota
                 raise e
             time.sleep(1)  # Brief pause before retry
     output_text = response.choices[0].message.content.strip()
+
     # Extract numerical score from the response
     try:
-        # Try to extract a number between 0 and 10
-        score_match = re.search(r'(\d+(?:\.\d+)?)', output_text)
-        if score_match:
-            predicted_score = float(score_match.group(1))
+        # parse the output as JSON
+        rating_object = json.loads(output_text)
+        sentiment_score = rating_object.get("sentiment_score", None)
 
-            # Ensure score is within valid range (0-10)
-            predicted_score = max(0.0, min(10.0, predicted_score))
+        if isinstance(sentiment_score, int) or isinstance(sentiment_score, float):
+            predicted_score = sentiment_score
         else:
-            predicted_score = 5.0  # Default to neutral
+            predicted_score = sentiment_score[0]
+            predicted_score = float(predicted_score)
+
+        # Ensure score is within valid range (0-10)
+        predicted_score = max(0.0, min(10.0, predicted_score))
+        if predicted_score is None:
+            predicted_score = 5.0  # Default to neutral score if not provided
 
         # Calculate accuracy based on how close the prediction is to the expected score
         # Using 1 - (absolute difference / 10), so perfect match = 1.0, worst case = 0.0
