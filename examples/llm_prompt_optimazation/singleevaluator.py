@@ -2,9 +2,16 @@ import re
 import time
 import json
 from textwrap import dedent
+from agno.agent import Agent, RunResponse  # noqa
+from agno.models.lmstudio import LMStudio
+from pydantic import BaseModel, Field
 
-TASK_MODEL_NAME = "mistral-dings"
+TASK_MODEL_NAME = "mistralai/mistral-small-3.2"
 MAX_RETRIES = 3  # Number of retries for LLM calls
+
+class Rating(BaseModel):
+    sentiment_score: float = Field(..., description="The score given by the LLM, ranging from 0 to 10.")
+    reasoning: str = Field(..., description="A brief explanation of the score given by the LLM.")
 
 def evaluate_single_example(example, individual_scores, prompt, test_model, total_score):
     input_text = example["text"]
@@ -19,6 +26,14 @@ def evaluate_single_example(example, individual_scores, prompt, test_model, tota
     "reasoning": "[brief explanation of scores]"
 }}
     """)
+
+    test_agent = Agent(model=LMStudio(id=TASK_MODEL_NAME,
+                                    base_url="http://192.168.176.251:1234/v1"),
+                  markdown=True,
+                  system_message=formatpromt,
+                    response_model=Rating)
+
+
     messages = [
         {"role": "system", "content": formatpromt},
         {"role": "user", "content": prompt.format(input_text=input_text)}
@@ -27,34 +42,38 @@ def evaluate_single_example(example, individual_scores, prompt, test_model, tota
     max_retries = MAX_RETRIES
     for attempt in range(max_retries):
         try:
-            response = test_model.chat.completions.create(
-                model=TASK_MODEL_NAME,
-                messages=messages
-            )
+            runResponse: RunResponse  = test_agent.run(prompt.format(input_text=input_text))
+            rating_object = runResponse.content
+            # response = test_model.chat.completions.create(
+            #     model=TASK_MODEL_NAME,
+            #     messages=messages
+            # )
             break
         except Exception as e:
             if attempt == max_retries - 1:
                 print(f"Failed to get response after {max_retries} attempts: {e}")
                 raise e
             time.sleep(1)  # Brief pause before retry
-    output_text = response.choices[0].message.content.strip()
+    # output_text = response.choices[0].message.content.strip()
 
     # Extract numerical score from the response
     try:
-        # parse the output as JSON
-        rating_object = json.loads(output_text)
-        sentiment_score = rating_object.get("sentiment_score", None)
 
-        if isinstance(sentiment_score, int) or isinstance(sentiment_score, float):
-            predicted_score = sentiment_score
-        else:
-            predicted_score = sentiment_score[0]
-            predicted_score = float(predicted_score)
+        rating_object = runResponse.content
+        # parse the output as JSON
+        # rating_object = json.loads(output_text)
+        predicted_score = rating_object.sentiment_score # Default to neutral score if not provided
+        #
+        # if isinstance(sentiment_score, int) or isinstance(sentiment_score, float):
+        #     predicted_score = sentiment_score
+        # else:
+        #     predicted_score = sentiment_score[0]
+        #     predicted_score = float(predicted_score)
 
         # Ensure score is within valid range (0-10)
         predicted_score = max(0.0, min(10.0, predicted_score))
-        if predicted_score is None:
-            predicted_score = 5.0  # Default to neutral score if not provided
+        # if predicted_score is None:
+        #     predicted_score = 5.0  # Default to neutral score if not provided
 
         # Calculate accuracy based on how close the prediction is to the expected score
         # Using 1 - (absolute difference / 10), so perfect match = 1.0, worst case = 0.0
@@ -63,6 +82,6 @@ def evaluate_single_example(example, individual_scores, prompt, test_model, tota
         total_score += accuracy
 
     except Exception as e:
-        print(f"Error processing response '{output_text}': {e}")
+        print(f"Error processing response '{runResponse}': {e}")
         individual_scores.append(0.0)  # Score 0 for failed predictions
     return total_score
