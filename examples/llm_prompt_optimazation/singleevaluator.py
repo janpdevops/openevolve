@@ -7,13 +7,15 @@ from agno.models.lmstudio import LMStudio
 from pydantic import BaseModel, Field
 
 TASK_MODEL_NAME = "mistralai/mistral-small-3.2"
+TASK_MODEL_URL = "http://192.168.178.90:1234/v1"
+TASK_MODEL_API_KEY = "weDontNeetItOnLocal"
 MAX_RETRIES = 3  # Number of retries for LLM calls
 
 class Rating(BaseModel):
     sentiment_score: float = Field(..., description="The score given by the LLM, ranging from 0 to 10.")
     reasoning: str = Field(..., description="A brief explanation of the score given by the LLM.")
 
-def evaluate_single_example(example, individual_scores, prompt, test_model, total_score):
+def evaluate_single_example(example, individual_scores, prompt,total_score):
     input_text = example["text"]
     expected_score = example["label"]
     # Prepare the message for the LLM
@@ -28,16 +30,11 @@ def evaluate_single_example(example, individual_scores, prompt, test_model, tota
     """)
 
     test_agent = Agent(model=LMStudio(id=TASK_MODEL_NAME,
-                                    base_url="http://192.168.176.251:1234/v1"),
+                                    base_url=TASK_MODEL_URL),
                   markdown=True,
                   system_message=formatpromt,
                     response_model=Rating)
 
-
-    messages = [
-        {"role": "system", "content": formatpromt},
-        {"role": "user", "content": prompt.format(input_text=input_text)}
-    ]
     # Call the LLM with retry logic
     max_retries = MAX_RETRIES
     for attempt in range(max_retries):
@@ -54,7 +51,6 @@ def evaluate_single_example(example, individual_scores, prompt, test_model, tota
                 print(f"Failed to get response after {max_retries} attempts: {e}")
                 raise e
             time.sleep(1)  # Brief pause before retry
-    # output_text = response.choices[0].message.content.strip()
 
     # Extract numerical score from the response
     try:
@@ -63,19 +59,10 @@ def evaluate_single_example(example, individual_scores, prompt, test_model, tota
         # parse the output as JSON
         # rating_object = json.loads(output_text)
         predicted_score = rating_object.sentiment_score # Default to neutral score if not provided
-        #
-        # if isinstance(sentiment_score, int) or isinstance(sentiment_score, float):
-        #     predicted_score = sentiment_score
-        # else:
-        #     predicted_score = sentiment_score[0]
-        #     predicted_score = float(predicted_score)
 
         # Ensure score is within valid range (0-10)
         predicted_score = max(0.0, min(10.0, predicted_score))
-        # if predicted_score is None:
-        #     predicted_score = 5.0  # Default to neutral score if not provided
-
-        # Calculate accuracy based on how close the prediction is to the expected score
+         # Calculate accuracy based on how close the prediction is to the expected score
         # Using 1 - (absolute difference / 10), so perfect match = 1.0, worst case = 0.0
         accuracy = 1.0 - (abs(predicted_score - expected_score) / 10.0)
         individual_scores.append(accuracy)
